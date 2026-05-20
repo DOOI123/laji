@@ -3,12 +3,13 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>Tactical Simulation</title>
+    <title>Tactical Simulation Pro</title>
     <style>
         * {
             box-sizing: border-box;
-            -webkit-user-select: none; /* 防止手机长按弹出菜单 */
+            -webkit-user-select: none;
             user-select: none;
+            -webkit-tap-highlight-color: transparent; /* 移除移动端点击高亮 */
         }
         body, html {
             margin: 0;
@@ -16,36 +17,36 @@
             width: 100%;
             height: 100%;
             overflow: hidden;
-            background-color: #fbfbfd; /* Apple 官网标志性极浅灰白 */
-            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, "PingFang SC", sans-serif;
+            background-color: #fbfbfd; /* 苹果经典浅白 */
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
         }
         #canvas {
             display: block;
             width: 100%;
             height: 100%;
         }
-        /* 顶部现代科技感仪表盘 */
+        /* 顶部 Apple 风格毛玻璃 HUD */
         #hud-layer {
             position: absolute;
             top: 24px;
             left: 50%;
             transform: translateX(-50%);
-            background: rgba(255, 255, 255, 0.7);
+            background: rgba(255, 255, 255, 0.75);
             -webkit-backdrop-filter: blur(20px);
             backdrop-filter: blur(20px);
             border: 1px solid rgba(0, 0, 0, 0.05);
-            padding: 12px 24px;
+            padding: 12px 28px;
             border-radius: 30px;
             color: #1d1d1f;
             font-size: 13px;
             font-weight: 500;
-            letter-spacing: 0.05em;
+            letter-spacing: 0.06em;
             pointer-events: none;
             text-align: center;
             box-shadow: 0 4px 30px rgba(0, 0, 0, 0.02);
-            transition: all 0.3s ease;
+            z-index: 5;
         }
-        /* 优雅的苹果风格系统弹窗 */
+        /* 标志性 Apple 原生系统弹窗组件 */
         #alert-overlay {
             position: absolute;
             top: 0;
@@ -60,7 +61,7 @@
             justify-content: center;
             opacity: 0;
             pointer-events: none;
-            transition: opacity 0.6s cubic-bezier(0.16, 1, 0.3, 1);
+            transition: opacity 0.5s cubic-bezier(0.16, 1, 0.3, 1);
             z-index: 10;
         }
         #alert-overlay.show {
@@ -68,16 +69,15 @@
             pointer-events: auto;
         }
         .apple-alert {
-            background: rgba(255, 255, 255, 0.9 base);
             background: #ffffff;
-            width: 280px;
+            width: 275px;
             border-radius: 14px;
             padding: 20px;
             text-align: center;
-            box-shadow: 0 10px 40px rgba(0,0,0,0.08);
-            transform: scale(0.9);
-            transition: transform 0.5s cubic-bezier(0.16, 1, 0.3, 1);
-            border: 1px solid rgba(0,0,0,0.05);
+            box-shadow: 0 10px 40px rgba(0,0,0,0.06);
+            transform: scale(0.92);
+            transition: transform 0.4s cubic-bezier(0.16, 1, 0.3, 1);
+            border: 1px solid rgba(0,0,0,0.04);
         }
         #alert-overlay.show .apple-alert {
             transform: scale(1);
@@ -95,27 +95,28 @@
             line-height: 1.4;
         }
         .alert-btn {
-            background: #0071e3; /* Apple 官方蓝色 */
+            background: #0071e3;
             color: white;
             border: none;
             width: 100%;
-            padding: 10px;
+            padding: 11px;
             border-radius: 8px;
             font-size: 15px;
             font-weight: 500;
             cursor: pointer;
+            outline: none;
         }
     </style>
 </head>
 <body>
 
-    <div id="hud-layer">STATUS: READY / HITS: 0</div>
+    <div id="hud-layer">LOCK ON: CROTCH / HITS: 0</div>
     <canvas id="canvas"></canvas>
 
-    <!-- 苹果风格确认弹窗 -->
+    <!-- 弹窗 -->
     <div id="alert-overlay">
         <div class="apple-alert">
-            <div class="alert-title">通知</div>
+            <div class="alert-title">提示</div>
             <div class="alert-body">清除完毕。<br>目标“张思远”已挂。</div>
             <button class="alert-btn" onclick="closeAlert()">好</button>
         </div>
@@ -127,7 +128,6 @@
     const hudLayer = document.getElementById('hud-layer');
     const alertOverlay = document.getElementById('alert-overlay');
 
-    // 屏幕适配
     function resize() {
         canvas.width = window.innerWidth * window.devicePixelRatio;
         canvas.height = window.innerHeight * window.devicePixelRatio;
@@ -136,70 +136,89 @@
     window.addEventListener('resize', resize);
     resize();
 
-    // 初始状态与控制变量
-    let mouse = { x: window.innerWidth / 2, y: window.innerHeight / 2 };
+    // 核心游戏逻辑与物理变量
     let hitCount = 0;
     let bloodParticles = [];
     let isDead = false;
-    let screenShake = 0;
-    let fallAngle = 0; // 倒地旋转角度
-    let isDragging = false;
+    let alertTriggered = false;
+    
+    let screenShake = 0;      // 屏幕震动衰减系数
+    let fallAngle = 0;        // 站立/倒地状态倾斜角
+    let bodyHitPulse = 0;     // 倒地后受击震颤力
+    
+    // 物理平移速度与摩擦力设定
+    let velocityX = 0;        
+    const friction = 0.88;    // 地面摩擦系数力
 
-    // 极简小人属性
+    // 骨骼基础配置（锁定视口中央）
     const stickman = {
         x: window.innerWidth / 2,
-        y: window.innerHeight / 2 + 60,
-        scale: 1.1
+        y: window.innerHeight / 2 + 30,
+        scale: 1.15
     };
 
-    // 移动端多点触控与滑动重写
+    // 获取当前动态的下体受击核心坐标 (随着骨骼倒地/位移实时改变)
+    function getCrotchCoords() {
+        const s = stickman.scale;
+        const baseCrotchY = stickman.y + 35 * s;
+        
+        if (!isDead) {
+            return { x: stickman.x, y: baseCrotchY };
+        } else {
+            // 倒地旋转 90 度后的全新矩阵投影点
+            // 围绕旋转原点 (stickman.x, stickman.y + 60) 进行三角函数映射
+            const pivotX = stickman.x;
+            const pivotY = stickman.y + 60;
+            const localCrotchX = 0;
+            const localCrotchY = baseCrotchY - pivotY;
+
+            // 旋转几何映射
+            const cos = Math.cos(fallAngle);
+            const sin = Math.sin(fallAngle);
+            return {
+                x: pivotX + (localCrotchX * cos - localCrotchY * sin),
+                y: pivotY + (localCrotchX * sin + localCrotchY * cos)
+            };
+        }
+    }
+
+    // 单击屏幕任意区域触发精确打击
     window.addEventListener('touchstart', (e) => {
-        isDragging = true;
-        const touch = e.touches[0];
-        mouse.x = touch.clientX;
-        mouse.y = touch.clientY;
-    }, { passive: true });
+        // 如果当前有弹窗拦截，点击只处理弹窗
+        if (alertOverlay.classList.contains('show')) return;
+        e.preventDefault();
+        fireWeapon();
+    }, { passive: false });
 
-    window.addEventListener('touchmove', (e) => {
-        if (!isDragging) return;
-        const touch = e.touches[0];
-        mouse.x = touch.clientX;
-        mouse.y = touch.clientY;
-    }, { passive: true });
-
-    window.addEventListener('touchend', (e) => {
-        isDragging = false;
-        // 单击或者释放时执行开火
+    window.addEventListener('mousedown', (e) => {
+        if (alertOverlay.classList.contains('show')) return;
         fireWeapon();
     });
 
-    // 同时也保留 PC 端的鼠标兼容支持
-    window.addEventListener('mousemove', (e) => {
-        mouse.x = e.clientX;
-        mouse.y = e.clientY;
-    });
-    window.addEventListener('mousedown', () => {
-        fireWeapon();
-    });
-
-    // 高级感血液粒子类（红夹克设计：更浅的轻量艺术喷溅，不过度血腥）
+    // 高级感流体喷溅粒子
     class Particle {
         constructor(x, y) {
             this.x = x;
             this.y = y;
-            this.vx = (Math.random() - 0.5) * 6;
-            this.vy = Math.random() * 5 + 1; 
-            this.radius = Math.random() * 3 + 1.5;
-            this.alpha = 0.9;
-            this.gravity = 0.2;
-            // 采用带高级感的半透明浅绯红
-            this.color = 'rgba(234, 67, 53,'; 
+            // 根据倒地状态调整喷溅方向
+            if (!isDead) {
+                this.vx = (Math.random() - 0.5) * 6;
+                this.vy = Math.random() * 4 + 1; 
+            } else {
+                // 倒地后受到向右的作用力，血液往右斜上方喷溅
+                this.vx = Math.random() * 6 + 1;
+                this.vy = -(Math.random() * 4 + 1);
+            }
+            this.radius = Math.random() * 2.5 + 1.5;
+            this.alpha = 0.95;
+            this.gravity = isDead ? 0.15 : 0.22;
+            this.color = 'rgba(234, 67, 53,'; // 苹果高定红
         }
         update() {
             this.x += this.vx;
             this.vy += this.gravity;
             this.y += this.vy;
-            this.alpha -= 0.015;
+            this.alpha -= 0.016;
         }
         draw(c) {
             c.save();
@@ -211,33 +230,38 @@
         }
     }
 
-    // 开火核心逻辑
+    // 核心开火行为
     function fireWeapon() {
-        if (alertOverlay.classList.contains('show')) return;
-
         hitCount++;
-        screenShake = 8; // 极其克制而平滑的后坐力抖动
+        screenShake = 10; // 枪械后坐力反馈
 
-        // 精准定位下体打击点
-        const crotchX = stickman.x;
-        const crotchY = stickman.y + 35 * stickman.scale;
+        // 无论如何变化，动态狙击自动定位最新下体坐标
+        const currentTarget = getCrotchCoords();
 
-        // 产生喷溅
-        for (let i = 0; i < 25; i++) {
-            bloodParticles.push(new Particle(crotchX, crotchY));
+        // 倒地后的额外动能反馈
+        if (isDead) {
+            velocityX = 15;        // 施加给小人向右横飞的物理初速度
+            bodyHitPulse = 12;     // 施加肌肉受击抽搐动能
         }
 
-        // 更新HUD
-        hudLayer.innerText = `STATUS: ENGAGED / HITS: ${hitCount}`;
+        // 瞬间喷吐粒子
+        for (let i = 0; i < 25; i++) {
+            bloodParticles.push(new Particle(currentTarget.x, currentTarget.y));
+        }
 
-        // 击中第5次触发逻辑
+        hudLayer.innerText = `LOCK ON: CROTCH / HITS: ${hitCount}`;
+
+        // 刚好满 5 枪，触发倒地结算机制
         if (hitCount === 5) {
             isDead = true;
-            hudLayer.innerText = `STATUS: TARGET ELIMINATED`;
-            // 延迟弹出苹果风格弹窗，等倒地动画做完
-            setTimeout(() => {
-                alertOverlay.classList.add('show');
-            }, 600);
+            hudLayer.innerText = `TARGET ELIMINATED`;
+            
+            if (!alertTriggered) {
+                alertTriggered = true;
+                setTimeout(() => {
+                    alertOverlay.classList.add('show');
+                }, 650);
+            }
         }
     }
 
@@ -245,64 +269,78 @@
         alertOverlay.classList.remove('show');
     }
 
-    // 渲染主循环
+    // 核心流式渲染循环
     function animate() {
-        // 背景刷新
+        // 清屏
         ctx.fillStyle = '#fbfbfd';
         ctx.fillRect(0, 0, window.innerWidth, window.innerHeight);
 
         ctx.save();
-        // 处理镜头震动衰减
+        // 1. 处理镜头后坐力抖动
         if (screenShake > 0) {
-            const dx = (Math.random() - 0.5) * screenShake;
-            const dy = (Math.random() - 0.5) * screenShake;
-            ctx.translate(dx, dy);
-            screenShake *= 0.85;
+            ctx.translate((Math.random() - 0.5) * screenShake, (Math.random() - 0.5) * screenShake);
+            screenShake *= 0.84;
             if (screenShake < 0.2) screenShake = 0;
         }
 
-        // ==================== 1. 绘制极简小人 (Apple Style) ====================
+        // 2. 物理碰撞与位移模拟（倒地后的滑行运动）
+        if (isDead && velocityX > 0) {
+            stickman.x += velocityX;
+            velocityX *= friction; // 摩擦力衰减
+            if (velocityX < 0.05) velocityX = 0;
+        }
+
+        // ==================== 绘制小人主体 ====================
         const s = stickman.scale;
         
         ctx.save();
-        // 缓动倒地物理动画
-        if (isDead) {
-            if (fallAngle < Math.PI / 2) {
-                fallAngle += (Math.PI / 2 - fallAngle) * 0.12; // 丝滑的缓动下落
-            }
-            ctx.translate(stickman.x, stickman.y + 60);
-            ctx.rotate(fallAngle);
-            ctx.translate(-stickman.x, -stickman.y - 60);
+        // 计算受击震颤动能
+        let pulseX = 0;
+        if (bodyHitPulse > 0) {
+            pulseX = (Math.random() - 0.5) * bodyHitPulse;
+            bodyHitPulse *= 0.8;
         }
 
-        // 炭黑色极细线条，符合苹果一贯的冷淡高级感
-        ctx.lineWidth = 2.5;
+        // 应用位移和倒地翻转矩阵
+        if (isDead) {
+            if (fallAngle < Math.PI / 2) {
+                fallAngle += (Math.PI / 2 - fallAngle) * 0.14; // 缓动流畅倾倒
+            }
+            ctx.translate(stickman.x + pulseX, stickman.y + 60);
+            ctx.rotate(fallAngle);
+            ctx.translate(-stickman.x, -stickman.y - 60);
+        } else {
+            ctx.translate(pulseX, 0);
+        }
+
+        // 极细炭黑美学线条
+        ctx.lineWidth = 2.2;
         ctx.strokeStyle = '#1d1d1f';
         ctx.fillStyle = '#1d1d1f';
 
-        // 目标文本
-        ctx.font = '500 13px -apple-system';
+        // 居中标签
+        ctx.font = '500 13px -apple-system, BlinkMacSystemFont';
         ctx.textAlign = 'center';
         ctx.fillText("张思远", stickman.x, stickman.y - 45 * s);
 
-        // 头（无缝正圆）
+        // 头部
         ctx.beginPath();
         ctx.arc(stickman.x, stickman.y - 15 * s, 10 * s, 0, Math.PI * 2);
         ctx.stroke();
 
-        // 身体
+        // 躯干
         ctx.beginPath();
         ctx.moveTo(stickman.x, stickman.y - 5 * s);
         ctx.lineTo(stickman.x, stickman.y + 35 * s);
         ctx.stroke();
 
-        // 胳膊
+        // 上肢
         ctx.beginPath();
-        ctx.moveTo(stickman.x - 20 * s, stickman.y + 8 * s);
-        ctx.lineTo(stickman.x + 20 * s, stickman.y + 8 * s);
+        ctx.moveTo(stickman.x - 18 * s, stickman.y + 8 * s);
+        ctx.lineTo(stickman.x + 18 * s, stickman.y + 8 * s);
         ctx.stroke();
 
-        // 双腿
+        // 下肢
         const crotchY = stickman.y + 35 * s;
         ctx.beginPath();
         ctx.moveTo(stickman.x, crotchY);
@@ -311,17 +349,17 @@
         ctx.lineTo(stickman.x + 12 * s, stickman.y + 70 * s);
         ctx.stroke();
 
-        // 下体累计受击反馈红点
+        // 实时渲染创伤扩散红点
         if (hitCount > 0) {
-            ctx.fillStyle = 'rgba(234, 67, 53, 0.8)';
+            ctx.fillStyle = 'rgba(234, 67, 53, 0.85)';
             ctx.beginPath();
-            ctx.arc(stickman.x, crotchY + 3, Math.min(4 + hitCount * 1.5, 20), 0, Math.PI * 2);
+            ctx.arc(stickman.x, crotchY + 3, Math.min(4 + hitCount * 1.3, 22), 0, Math.PI * 2);
             ctx.fill();
         }
 
         ctx.restore();
 
-        // ==================== 2. 渲染血液粒子 ====================
+        // ==================== 渲染血液流体粒子 ====================
         for (let i = bloodParticles.length - 1; i >= 0; i--) {
             bloodParticles[i].update();
             bloodParticles[i].draw(ctx);
@@ -330,42 +368,42 @@
             }
         }
 
-        ctx.restore(); // 结束震动
+        ctx.restore(); // 退出镜头后坐力矩阵
 
-        // ==================== 3. 绘制苹果风格高科技十字瞄准镜 ====================
+        // ==================== 智能锁定的高级感狙击镜 ====================
+        // 获取当前帧最新的、无论站立还是位移倒地后的下体精确中心点
+        const crosshairTarget = getCrotchCoords();
+
         ctx.save();
-        // 极细微深灰线条
-        ctx.strokeStyle = 'rgba(29, 29, 31, 0.4)';
         ctx.lineWidth = 1;
 
-        // 外部大虚线环
+        // 1. 外层高级空气感虚线刻度环
+        ctx.strokeStyle = 'rgba(29, 29, 31, 0.3)';
         ctx.beginPath();
-        ctx.arc(mouse.x, mouse.y, 140, 0, Math.PI * 2);
-        ctx.setLineDash([4, 12]);
+        ctx.arc(crosshairTarget.x, crosshairTarget.y, 130, 0, Math.PI * 2);
+        ctx.setLineDash([4, 10]);
         ctx.stroke();
         ctx.setLineDash([]);
 
-        // 内部精准实线锁定环
-        ctx.strokeStyle = 'rgba(29, 29, 31, 0.8)';
+        // 2. 内层核心战术环
+        ctx.strokeStyle = 'rgba(29, 29, 31, 0.75)';
         ctx.beginPath();
-        ctx.arc(mouse.x, mouse.y, 45, 0, Math.PI * 2);
+        ctx.arc(crosshairTarget.x, crosshairTarget.y, 40, 0, Math.PI * 2);
         ctx.stroke();
 
-        // 极简标尺刻度十字线
-        ctx.strokeStyle = 'rgba(29, 29, 31, 0.2)';
+        // 3. 极简标尺线
+        ctx.strokeStyle = 'rgba(29, 29, 31, 0.15)';
         ctx.beginPath();
-        // 左 / 右
-        ctx.moveTo(mouse.x - 180, mouse.y); ctx.lineTo(mouse.x - 55, mouse.y);
-        ctx.moveTo(mouse.x + 55, mouse.y); ctx.lineTo(mouse.x + 180, mouse.y);
-        // 上 / 下
-        ctx.moveTo(mouse.x, mouse.y - 180); ctx.lineTo(mouse.x, mouse.y - 55);
-        ctx.moveTo(mouse.x, mouse.y + 55); ctx.lineTo(mouse.x, mouse.y + 180);
+        ctx.moveTo(crosshairTarget.x - 160, crosshairTarget.y); ctx.lineTo(crosshairTarget.x - 48, crosshairTarget.y);
+        ctx.moveTo(crosshairTarget.x + 48, crosshairTarget.y); ctx.lineTo(crosshairTarget.x + 160, crosshairTarget.y);
+        ctx.moveTo(crosshairTarget.x, crosshairTarget.y - 160); ctx.lineTo(crosshairTarget.x, crosshairTarget.y - 48);
+        ctx.moveTo(crosshairTarget.x, crosshairTarget.y + 48); ctx.lineTo(crosshairTarget.x, crosshairTarget.y + 160);
         ctx.stroke();
 
-        // 中央精细打击红点
+        // 4. 精准锁定激光点
         ctx.fillStyle = '#ea4335';
         ctx.beginPath();
-        ctx.arc(mouse.x, mouse.y, 2.5, 0, Math.PI * 2);
+        ctx.arc(crosshairTarget.x, crosshairTarget.y, 2.5, 0, Math.PI * 2);
         ctx.fill();
 
         ctx.restore();
@@ -373,6 +411,7 @@
         requestAnimationFrame(animate);
     }
 
+    // 启动动画
     animate();
 </script>
 </body>
