@@ -1,0 +1,288 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>精确打击演练</title>
+    <style>
+        * {
+            box-sizing: border-box;
+        }
+        body, html {
+            margin: 0;
+            padding: 0;
+            width: 100%;
+            height: 100%;
+            overflow: hidden;
+            background-color: #050505;
+            font-family: 'PingFang SC', 'Microsoft YaHei', sans-serif;
+        }
+        #canvas {
+            display: block;
+            width: 100%;
+            height: 100%;
+            cursor: none; /* 隐藏默认鼠标，用狙击准心代替 */
+        }
+        #tip-layer {
+            position: absolute;
+            top: 5%;
+            left: 50%;
+            transform: translateX(-50%);
+            color: #00ff00;
+            font-family: monospace;
+            font-size: 16px;
+            text-shadow: 0 0 5px #00ff00;
+            pointer-events: none;
+            text-align: center;
+        }
+    </style>
+</head>
+<body>
+
+    <div id="tip-layer">系统就绪：点击鼠标左键释放连发打击（0/3）</div>
+    <canvas id="canvas"></canvas>
+
+<script>
+    const canvas = document.getElementById('canvas');
+    const ctx = canvas.getContext('2d');
+    const tipLayer = document.getElementById('tip-layer');
+
+    // 适配高分屏
+    function resize() {
+        canvas.width = window.innerWidth * window.devicePixelRatio;
+        canvas.height = window.innerHeight * window.devicePixelRatio;
+        ctx.scale(window.devicePixelRatio, window.devicePixelRatio);
+    }
+    window.addEventListener('resize', resize);
+    resize();
+
+    // 鼠标位置
+    let mouse = { x: window.innerWidth / 2, y: window.innerHeight / 2 };
+    window.addEventListener('mousemove', (e) => {
+        mouse.x = e.clientX;
+        mouse.y = e.clientY;
+    });
+
+    // 击打状态控制
+    let hitCount = 0;
+    let bloodParticles = [];
+    let isDead = false;
+    let screenShake = 0;
+
+    // 小人配置参数
+    const stickman = {
+        x: 0,
+        y: 0,
+        scale: 1,
+        targetY: 0
+    };
+
+    // 初始化小人位置（居中靠下）
+    function initStickman() {
+        stickman.x = window.innerWidth / 2;
+        stickman.y = window.innerHeight / 2 + 50;
+        stickman.scale = 1.2;
+    }
+    initStickman();
+
+    // 粒子类：用于制造逼真的流体/血液喷溅效果
+    class Particle {
+        constructor(x, y) {
+            this.x = x;
+            this.y = y;
+            // 设定向下方和左右两侧喷溅的初速度
+            this.vx = (Math.random() - 0.5) * 8;
+            this.vy = Math.random() * 6 + 2; 
+            this.radius = Math.random() * 4 + 2;
+            this.alpha = 1;
+            this.gravity = 0.25; // 重力加速度
+            this.color = Math.random() > 0.3 ? '#cc0000' : '#990000'; // 鲜红与暗红交错
+        }
+        update() {
+            this.x += this.vx;
+            this.vy += this.gravity;
+            this.y += this.vy;
+            this.alpha -= 0.012; // 逐渐淡出
+        }
+        draw(c) {
+            c.save();
+            c.globalAlpha = this.alpha;
+            c.fillStyle = this.color;
+            c.beginPath();
+            c.arc(this.x, this.y, this.radius, 0, Math.PI * 2);
+            c.fill();
+            c.restore();
+        }
+    }
+
+    // 触发射击
+    window.addEventListener('mousedown', () => {
+        if (hitCount >= 3) return;
+
+        hitCount++;
+        screenShake = 15; // 触发枪械后坐力屏幕震动
+
+        // 定位下体坐标位置（核心躯干下方）
+        const crotchX = stickman.x;
+        const crotchY = stickman.y + 40 * stickman.scale;
+
+        // 每次击中生成大量喷溅粒子
+        for (let i = 0; i < 40; i++) {
+            bloodParticles.push(new Particle(crotchX, crotchY));
+        }
+
+        // 更新状态栏
+        if (hitCount < 3) {
+            tipLayer.innerText = `目标已被锁定制导！击中下体（${hitCount}/3）`;
+        } else {
+            isDead = true;
+            tipLayer.innerText = `清除完毕。目标“张思远”已丧失行动能力！`;
+            tipLayer.style.color = '#ff0000';
+            tipLayer.style.textShadow = '0 0 5px #ff0000';
+        }
+    });
+
+    // 主渲染循环（60fps）
+    function animate() {
+        // 清屏
+        ctx.fillStyle = '#050505';
+        ctx.fillRect(0, 0, window.innerWidth, window.innerHeight);
+
+        ctx.save();
+        // 处理后坐力导致的屏幕震动
+        if (screenShake > 0) {
+            const dx = (Math.random() - 0.5) * screenShake;
+            const dy = (Math.random() - 0.5) * screenShake;
+            ctx.translate(dx, dy);
+            screenShake *= 0.9; // 震动衰减
+            if (screenShake < 0.5) screenShake = 0;
+        }
+
+        // ==================== 1. 绘制被击目标（小人） ====================
+        const s = stickman.scale;
+        
+        // 如果倒地，平滑改变旋转角度和高度
+        ctx.save();
+        if (isDead) {
+            // 第3枪倒地：平滑向右倾倒
+            if (stickman.targetY < 70) stickman.targetY += 4;
+            ctx.translate(stickman.x, stickman.y + stickman.targetY);
+            ctx.rotate(Math.PI / 2); // 顺时针旋转90度躺下
+            ctx.translate(-stickman.x, -stickman.y);
+        }
+
+        ctx.lineWidth = 4;
+        ctx.strokeStyle = '#ffffff';
+        ctx.fillStyle = '#ffffff';
+
+        // 名字标签
+        ctx.font = '14px monospace';
+        ctx.textAlign = 'center';
+        ctx.fillText("目标: 张思远", stickman.x, stickman.y - 40 * s);
+
+        // 头
+        ctx.beginPath();
+        ctx.arc(stickman.x, stickman.y - 15 * s, 12 * s, 0, Math.PI * 2);
+        ctx.stroke();
+
+        // 躯干（脊椎）
+        ctx.beginPath();
+        ctx.moveTo(stickman.x, stickman.y - 3 * s);
+        ctx.lineTo(stickman.x, stickman.y + 35 * s);
+        ctx.stroke();
+
+        // 双臂
+        ctx.beginPath();
+        ctx.moveTo(stickman.x - 25 * s, stickman.y + 10 * s);
+        ctx.lineTo(stickman.x + 25 * s, stickman.y + 10 * s);
+        ctx.stroke();
+
+        // 双腿（从下体分叉）
+        const crotchY = stickman.y + 35 * s;
+        ctx.beginPath();
+        // 左腿
+        ctx.moveTo(stickman.x, crotchY);
+        ctx.lineTo(stickman.x - 15 * s, stickman.y + 75 * s);
+        // 右腿
+        ctx.moveTo(stickman.x, crotchY);
+        ctx.lineTo(stickman.x + 15 * s, stickman.y + 75 * s);
+        ctx.stroke();
+
+        // 特效标红：下体受击点标记
+        if (hitCount > 0) {
+            ctx.fillStyle = '#ff0000';
+            ctx.beginPath();
+            ctx.arc(stickman.x, crotchY + 5, 6 * hitCount, 0, Math.PI * 2);
+            ctx.fill();
+        }
+
+        ctx.restore();
+
+        // ==================== 2. 渲染血液粒子系统 ====================
+        for (let i = bloodParticles.length - 1; i >= 0; i--) {
+            bloodParticles[i].update();
+            bloodParticles[i].draw(ctx);
+            if (bloodParticles[i].alpha <= 0) {
+                bloodParticles.splice(i, 1);
+            }
+        }
+
+        ctx.restore(); // 结束震动矩阵
+
+        // ==================== 3. 绘制狙击枪瞄准镜界面 ====================
+        const viewW = window.innerWidth;
+        const viewH = window.innerHeight;
+
+        // 绘制十字准心（跟随鼠标移动）
+        ctx.save();
+        ctx.strokeStyle = '#00ff00';
+        ctx.lineWidth = 1.5;
+
+        // 外层大测距圆环
+        ctx.beginPath();
+        ctx.arc(mouse.x, mouse.y, 220, 0, Math.PI * 2);
+        ctx.stroke();
+
+        // 内层精准锁定圈
+        ctx.beginPath();
+        ctx.arc(mouse.x, mouse.y, 60, 0, Math.PI * 2);
+        ctx.setLineDash([5, 5]); // 虚线圈
+        ctx.stroke();
+        ctx.setLineDash([]); // 恢复实线
+
+        // 十字刻度线
+        ctx.beginPath();
+        // 横线
+        ctx.moveTo(mouse.x - 260, mouse.y);
+        ctx.lineTo(mouse.x - 10, mouse.y);
+        ctx.moveTo(mouse.x + 10, mouse.y);
+        ctx.lineTo(mouse.x + 260, mouse.y);
+        // 竖线
+        ctx.moveTo(mouse.x, mouse.y - 260);
+        ctx.lineTo(mouse.x, mouse.y - 10);
+        ctx.moveTo(mouse.x, mouse.y + 10);
+        ctx.lineTo(mouse.x, mouse.y + 260);
+        ctx.stroke();
+
+        // 中心死角红点
+        ctx.fillStyle = '#ff0000';
+        ctx.beginPath();
+        ctx.arc(mouse.x, mouse.y, 3, 0, Math.PI * 2);
+        ctx.fill();
+
+        // 刻度数字与UI美化
+        ctx.fillStyle = '#00ff00';
+        ctx.font = '11px monospace';
+        ctx.fillText("HD PLS: 2026", mouse.x + 70, mouse.y + 5);
+        ctx.fillText("ZOOM: 12.0X", mouse.x - 120, mouse.y + 5);
+        ctx.restore();
+
+        // 闭环调用
+        requestAnimationFrame(animate);
+    }
+
+    // 启动动画
+    animate();
+</script>
+</body>
+</html>
