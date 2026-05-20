@@ -3,13 +3,13 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>Tactical Simulation Pro</title>
+    <title>Tactical Physics Simulation</title>
     <style>
         * {
             box-sizing: border-box;
             -webkit-user-select: none;
             user-select: none;
-            -webkit-tap-highlight-color: transparent; /* 移除移动端点击高亮 */
+            -webkit-tap-highlight-color: transparent;
         }
         body, html {
             margin: 0;
@@ -17,21 +17,21 @@
             width: 100%;
             height: 100%;
             overflow: hidden;
-            background-color: #fbfbfd; /* 苹果经典浅白 */
-            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+            background-color: #fbfbfd; /* Apple 经典白色 */
+            font-family: -apple-system, BlinkMacSystemFont, sans-serif;
         }
         #canvas {
             display: block;
             width: 100%;
             height: 100%;
         }
-        /* 顶部 Apple 风格毛玻璃 HUD */
+        /* HUD 仪表盘 */
         #hud-layer {
             position: absolute;
             top: 24px;
             left: 50%;
             transform: translateX(-50%);
-            background: rgba(255, 255, 255, 0.75);
+            background: rgba(255, 255, 255, 0.8);
             -webkit-backdrop-filter: blur(20px);
             backdrop-filter: blur(20px);
             border: 1px solid rgba(0, 0, 0, 0.05);
@@ -46,7 +46,7 @@
             box-shadow: 0 4px 30px rgba(0, 0, 0, 0.02);
             z-index: 5;
         }
-        /* 标志性 Apple 原生系统弹窗组件 */
+        /* Apple 风格弹窗 */
         #alert-overlay {
             position: absolute;
             top: 0;
@@ -104,16 +104,14 @@
             font-size: 15px;
             font-weight: 500;
             cursor: pointer;
-            outline: none;
         }
     </style>
 </head>
 <body>
 
-    <div id="hud-layer">LOCK ON: CROTCH / HITS: 0</div>
+    <div id="hud-layer">AUTO LOCK: ON / HITS: 0</div>
     <canvas id="canvas"></canvas>
 
-    <!-- 弹窗 -->
     <div id="alert-overlay">
         <div class="apple-alert">
             <div class="alert-title">提示</div>
@@ -128,36 +126,45 @@
     const hudLayer = document.getElementById('hud-layer');
     const alertOverlay = document.getElementById('alert-overlay');
 
+    let w = window.innerWidth;
+    let h = window.innerHeight;
+
     function resize() {
-        canvas.width = window.innerWidth * window.devicePixelRatio;
-        canvas.height = window.innerHeight * window.devicePixelRatio;
+        w = window.innerWidth;
+        h = window.innerHeight;
+        canvas.width = w * window.devicePixelRatio;
+        canvas.height = h * window.devicePixelRatio;
         ctx.scale(window.devicePixelRatio, window.devicePixelRatio);
     }
     window.addEventListener('resize', resize);
     resize();
 
-    // 核心游戏逻辑与物理变量
+    // 状态与物理控制变量
     let hitCount = 0;
     let bloodParticles = [];
     let isDead = false;
     let alertTriggered = false;
     
-    let screenShake = 0;      // 屏幕震动衰减系数
-    let fallAngle = 0;        // 站立/倒地状态倾斜角
-    let bodyHitPulse = 0;     // 倒地后受击震颤力
-    
-    // 物理平移速度与摩擦力设定
-    let velocityX = 0;        
-    const friction = 0.88;    // 地面摩擦系数力
+    let screenShake = 0;
+    let fallAngle = 0;        // 身体翻滚旋转角度
+    let rotSpeed = 0;        // 旋转速度
 
-    // 骨骼基础配置（锁定视口中央）
+    // 小人物理结构体
     const stickman = {
-        x: window.innerWidth / 2,
-        y: window.innerHeight / 2 + 30,
+        x: w / 2,
+        y: h / 2 + 30,
+        vx: 0,            // 横向速度
+        vy: 0,            // 纵向速度
+        radius: 50,       // 用于碰撞检测的近似边缘半径
         scale: 1.15
     };
 
-    // 获取当前动态的下体受击核心坐标 (随着骨骼倒地/位移实时改变)
+    // 环境物理常数
+    const gravity = 0.25;     // 重力
+    const airResistance = 0.985; // 空气阻力/摩擦力
+    const bounce = -0.75;     // 边缘碰撞反弹系数（带轻微能量损耗）
+
+    // 获取小人下体（受击点）在世界坐标系中的真实投影位置
     function getCrotchCoords() {
         const s = stickman.scale;
         const baseCrotchY = stickman.y + 35 * s;
@@ -165,26 +172,23 @@
         if (!isDead) {
             return { x: stickman.x, y: baseCrotchY };
         } else {
-            // 倒地旋转 90 度后的全新矩阵投影点
-            // 围绕旋转原点 (stickman.x, stickman.y + 60) 进行三角函数映射
+            // 倒地或乱飘状态下，围绕骨骼中心点（脊椎中段）进行矩阵旋转计算
             const pivotX = stickman.x;
-            const pivotY = stickman.y + 60;
-            const localCrotchX = 0;
-            const localCrotchY = baseCrotchY - pivotY;
+            const pivotY = stickman.y + 30 * s;
+            const localX = 0;
+            const localY = baseCrotchY - pivotY;
 
-            // 旋转几何映射
             const cos = Math.cos(fallAngle);
             const sin = Math.sin(fallAngle);
             return {
-                x: pivotX + (localCrotchX * cos - localCrotchY * sin),
-                y: pivotY + (localCrotchX * sin + localCrotchY * cos)
+                x: pivotX + (localX * cos - localY * sin),
+                y: pivotY + (localX * sin + localY * cos)
             };
         }
     }
 
-    // 单击屏幕任意区域触发精确打击
+    // 点击事件监听（多端兼容）
     window.addEventListener('touchstart', (e) => {
-        // 如果当前有弹窗拦截，点击只处理弹窗
         if (alertOverlay.classList.contains('show')) return;
         e.preventDefault();
         fireWeapon();
@@ -195,30 +199,23 @@
         fireWeapon();
     });
 
-    // 高级感流体喷溅粒子
+    // 优雅流体血流粒子
     class Particle {
-        constructor(x, y) {
+        constructor(x, y, vx, vy) {
             this.x = x;
             this.y = y;
-            // 根据倒地状态调整喷溅方向
-            if (!isDead) {
-                this.vx = (Math.random() - 0.5) * 6;
-                this.vy = Math.random() * 4 + 1; 
-            } else {
-                // 倒地后受到向右的作用力，血液往右斜上方喷溅
-                this.vx = Math.random() * 6 + 1;
-                this.vy = -(Math.random() * 4 + 1);
-            }
-            this.radius = Math.random() * 2.5 + 1.5;
-            this.alpha = 0.95;
-            this.gravity = isDead ? 0.15 : 0.22;
-            this.color = 'rgba(234, 67, 53,'; // 苹果高定红
+            this.vx = vx;
+            this.vy = vy;
+            this.radius = Math.random() * 2.5 + 1.2;
+            this.alpha = 1;
+            this.decay = Math.random() * 0.015 + 0.01;
+            this.color = 'rgba(234, 67, 53,'; // Apple Premium Red
         }
         update() {
             this.x += this.vx;
-            this.vy += this.gravity;
+            this.vy += 0.15; // 粒子自身受微量重力
             this.y += this.vy;
-            this.alpha -= 0.016;
+            this.alpha -= this.decay;
         }
         draw(c) {
             c.save();
@@ -230,37 +227,47 @@
         }
     }
 
-    // 核心开火行为
+    // 触发开火核心机制
     function fireWeapon() {
         hitCount++;
-        screenShake = 10; // 枪械后坐力反馈
+        screenShake = 12; // 镜头后坐力
 
-        // 无论如何变化，动态狙击自动定位最新下体坐标
-        const currentTarget = getCrotchCoords();
+        const target = getCrotchCoords();
 
-        // 倒地后的额外动能反馈
+        // 瞬间生成爆发性喷溅粒子
+        for (let i = 0; i < 20; i++) {
+            const pVx = (Math.random() - 0.5) * 8 + stickman.vx * 0.5;
+            const pVy = (Math.random() - 0.5) * 8 + stickman.vy * 0.5;
+            bloodParticles.push(new Particle(target.x, target.y, pVx, pVy));
+        }
+
+        // 倒地之后的受击：触发空中疯狂无规则乱飘
         if (isDead) {
-            velocityX = 15;        // 施加给小人向右横飞的物理初速度
-            bodyHitPulse = 12;     // 施加肌肉受击抽搐动能
+            // 给小人施加一个巨大的、随机方向的爆发冲击力
+            const angle = Math.random() * Math.PI * 2;
+            const force = Math.random() * 12 + 18; // 强劲的冲量
+            stickman.vx = Math.cos(angle) * force;
+            stickman.vy = Math.sin(angle) * force;
+            
+            // 增加翻滚角速度
+            rotSpeed = (Math.random() - 0.5) * 0.6;
         }
 
-        // 瞬间喷吐粒子
-        for (let i = 0; i < 25; i++) {
-            bloodParticles.push(new Particle(currentTarget.x, currentTarget.y));
-        }
+        hudLayer.innerText = `AUTO LOCK: ON / HITS: ${hitCount}`;
 
-        hudLayer.innerText = `LOCK ON: CROTCH / HITS: ${hitCount}`;
-
-        // 刚好满 5 枪，触发倒地结算机制
+        // 满 5 枪击毙
         if (hitCount === 5) {
             isDead = true;
+            rotSpeed = 0.15;
+            // 给予初次击飞向上的微弱力
+            stickman.vy = -8;
             hudLayer.innerText = `TARGET ELIMINATED`;
             
             if (!alertTriggered) {
                 alertTriggered = true;
                 setTimeout(() => {
                     alertOverlay.classList.add('show');
-                }, 650);
+                }, 600);
             }
         }
     }
@@ -269,61 +276,95 @@
         alertOverlay.classList.remove('show');
     }
 
-    // 核心流式渲染循环
+    // 核心渲染与物理仿真引擎循环
     function animate() {
-        // 清屏
+        // 每帧擦除，高质感白底
         ctx.fillStyle = '#fbfbfd';
-        ctx.fillRect(0, 0, window.innerWidth, window.innerHeight);
+        ctx.fillRect(0, 0, w, h);
 
         ctx.save();
-        // 1. 处理镜头后坐力抖动
+        // 1. 模拟画面震动
         if (screenShake > 0) {
             ctx.translate((Math.random() - 0.5) * screenShake, (Math.random() - 0.5) * screenShake);
-            screenShake *= 0.84;
+            screenShake *= 0.85;
             if (screenShake < 0.2) screenShake = 0;
         }
 
-        // 2. 物理碰撞与位移模拟（倒地后的滑行运动）
-        if (isDead && velocityX > 0) {
-            stickman.x += velocityX;
-            velocityX *= friction; // 摩擦力衰减
-            if (velocityX < 0.05) velocityX = 0;
+        // 2. 倒地后的高级完整物理世界演算
+        if (isDead) {
+            // 应用环境物理力：重力与空气阻力
+            stickman.vy += gravity;
+            stickman.vx *= airResistance;
+            stickman.vy *= airResistance;
+
+            // 更新位移和旋转
+            stickman.x += stickman.vx;
+            stickman.y += stickman.vy;
+            fallAngle += rotSpeed;
+            rotSpeed *= 0.99; // 旋转阻尼
+
+            // ---- 安全边界碰撞检测 (防止小人飘出屏幕) ----
+            const margin = 40; // 边缘安全间距
+            
+            // 左右边界碰撞反弹
+            if (stickman.x < margin) {
+                stickman.x = margin;
+                stickman.vx *= bounce;
+                rotSpeed += (Math.random() - 0.5) * 0.2; // 撞墙产生扭矩旋转
+            } else if (stickman.x > w - margin) {
+                stickman.x = w - margin;
+                stickman.vx *= bounce;
+                rotSpeed += (Math.random() - 0.5) * 0.2;
+            }
+
+            // 上下边界碰撞反弹
+            if (stickman.y < margin) {
+                stickman.y = margin;
+                stickman.vy *= bounce;
+            } else if (stickman.y > h - margin - 30) {
+                stickman.y = h - margin - 30;
+                stickman.vy *= bounce;
+                // 地面摩擦：如果速度过小则静止
+                stickman.vx *= 0.9; 
+            }
+
+            // ---- 核心追加功能：在空中移动时，下体无间断主动流血尾迹 ----
+            const speed = Math.sqrt(stickman.vx * stickman.vx + stickman.vy * stickman.vy);
+            if (speed > 1) {
+                const currentCrotch = getCrotchCoords();
+                // 每帧在下体动态生成1-2颗自然滴落的流血粒子
+                if (Math.random() > 0.3) {
+                    bloodParticles.push(new Particle(
+                        currentCrotch.x, 
+                        currentCrotch.y, 
+                        (Math.random() - 0.5) * 2 - stickman.vx * 0.1, // 留滞空气的阻力感
+                        (Math.random() - 0.5) * 2 - stickman.vy * 0.1
+                    ));
+                }
+            }
         }
 
-        // ==================== 绘制小人主体 ====================
+        // ==================== 绘制骨骼小人 ====================
         const s = stickman.scale;
         
         ctx.save();
-        // 计算受击震颤动能
-        let pulseX = 0;
-        if (bodyHitPulse > 0) {
-            pulseX = (Math.random() - 0.5) * bodyHitPulse;
-            bodyHitPulse *= 0.8;
-        }
-
-        // 应用位移和倒地翻转矩阵
         if (isDead) {
-            if (fallAngle < Math.PI / 2) {
-                fallAngle += (Math.PI / 2 - fallAngle) * 0.14; // 缓动流畅倾倒
-            }
-            ctx.translate(stickman.x + pulseX, stickman.y + 60);
+            // 围绕身体中心平移旋转
+            ctx.translate(stickman.x, stickman.y + 30 * s);
             ctx.rotate(fallAngle);
-            ctx.translate(-stickman.x, -stickman.y - 60);
-        } else {
-            ctx.translate(pulseX, 0);
+            ctx.translate(-stickman.x, -stickman.y - 30 * s);
         }
 
-        // 极细炭黑美学线条
         ctx.lineWidth = 2.2;
         ctx.strokeStyle = '#1d1d1f';
         ctx.fillStyle = '#1d1d1f';
 
-        // 居中标签
+        // 艺术字体名字
         ctx.font = '500 13px -apple-system, BlinkMacSystemFont';
         ctx.textAlign = 'center';
         ctx.fillText("张思远", stickman.x, stickman.y - 45 * s);
 
-        // 头部
+        // 头
         ctx.beginPath();
         ctx.arc(stickman.x, stickman.y - 15 * s, 10 * s, 0, Math.PI * 2);
         ctx.stroke();
@@ -349,17 +390,17 @@
         ctx.lineTo(stickman.x + 12 * s, stickman.y + 70 * s);
         ctx.stroke();
 
-        // 实时渲染创伤扩散红点
+        // 受击核心扩散红晕反馈
         if (hitCount > 0) {
             ctx.fillStyle = 'rgba(234, 67, 53, 0.85)';
             ctx.beginPath();
-            ctx.arc(stickman.x, crotchY + 3, Math.min(4 + hitCount * 1.3, 22), 0, Math.PI * 2);
+            ctx.arc(stickman.x, crotchY + 3, Math.min(4 + hitCount * 1.2, 24), 0, Math.PI * 2);
             ctx.fill();
         }
 
         ctx.restore();
 
-        // ==================== 渲染血液流体粒子 ====================
+        // ==================== 渲染与回收粒子系统 ====================
         for (let i = bloodParticles.length - 1; i >= 0; i--) {
             bloodParticles[i].update();
             bloodParticles[i].draw(ctx);
@@ -368,39 +409,38 @@
             }
         }
 
-        ctx.restore(); // 退出镜头后坐力矩阵
+        ctx.restore(); // 退出震动矩阵
 
-        // ==================== 智能锁定的高级感狙击镜 ====================
-        // 获取当前帧最新的、无论站立还是位移倒地后的下体精确中心点
+        // ==================== 实时强追踪智能化狙击镜 ====================
         const crosshairTarget = getCrotchCoords();
 
         ctx.save();
         ctx.lineWidth = 1;
 
-        // 1. 外层高级空气感虚线刻度环
-        ctx.strokeStyle = 'rgba(29, 29, 31, 0.3)';
+        // 外部微调环
+        ctx.strokeStyle = 'rgba(29, 29, 31, 0.25)';
         ctx.beginPath();
-        ctx.arc(crosshairTarget.x, crosshairTarget.y, 130, 0, Math.PI * 2);
+        ctx.arc(crosshairTarget.x, crosshairTarget.y, 125, 0, Math.PI * 2);
         ctx.setLineDash([4, 10]);
         ctx.stroke();
         ctx.setLineDash([]);
 
-        // 2. 内层核心战术环
+        // 内部核心锁定环
         ctx.strokeStyle = 'rgba(29, 29, 31, 0.75)';
         ctx.beginPath();
-        ctx.arc(crosshairTarget.x, crosshairTarget.y, 40, 0, Math.PI * 2);
+        ctx.arc(crosshairTarget.x, crosshairTarget.y, 42, 0, Math.PI * 2);
         ctx.stroke();
 
-        // 3. 极简标尺线
-        ctx.strokeStyle = 'rgba(29, 29, 31, 0.15)';
+        // 极简十字刻度
+        ctx.strokeStyle = 'rgba(29, 29, 31, 0.12)';
         ctx.beginPath();
-        ctx.moveTo(crosshairTarget.x - 160, crosshairTarget.y); ctx.lineTo(crosshairTarget.x - 48, crosshairTarget.y);
-        ctx.moveTo(crosshairTarget.x + 48, crosshairTarget.y); ctx.lineTo(crosshairTarget.x + 160, crosshairTarget.y);
-        ctx.moveTo(crosshairTarget.x, crosshairTarget.y - 160); ctx.lineTo(crosshairTarget.x, crosshairTarget.y - 48);
-        ctx.moveTo(crosshairTarget.x, crosshairTarget.y + 48); ctx.lineTo(crosshairTarget.x, crosshairTarget.y + 160);
+        ctx.moveTo(crosshairTarget.x - 155, crosshairTarget.y); ctx.lineTo(crosshairTarget.x - 50, crosshairTarget.y);
+        ctx.moveTo(crosshairTarget.x + 50, crosshairTarget.y); ctx.lineTo(crosshairTarget.x + 155, crosshairTarget.y);
+        ctx.moveTo(crosshairTarget.x, crosshairTarget.y - 155); ctx.lineTo(crosshairTarget.x, crosshairTarget.y - 50);
+        ctx.moveTo(crosshairTarget.x, crosshairTarget.y + 50); ctx.lineTo(crosshairTarget.x, crosshairTarget.y + 155);
         ctx.stroke();
 
-        // 4. 精准锁定激光点
+        // 精准制导红点
         ctx.fillStyle = '#ea4335';
         ctx.beginPath();
         ctx.arc(crosshairTarget.x, crosshairTarget.y, 2.5, 0, Math.PI * 2);
@@ -411,7 +451,6 @@
         requestAnimationFrame(animate);
     }
 
-    // 启动动画
     animate();
 </script>
 </body>
